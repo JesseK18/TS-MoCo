@@ -20,6 +20,7 @@ from datasets.UCIHAR_dataset import UCIHARDataModule
 from datasets.cho2017_dataset import Cho2017DataModule
 from datasets.ucr_dataset import UCRDataModule
 from utils.restricted_float import restricted_float
+from functions.embeddings import compute_embeddings, print_embedding_info
 #from knockknock import email_sender
 #from dotenv import load_dotenv
 
@@ -190,6 +191,44 @@ def main(args):
 
     #results = supervised_trainer.test(enc_classifier, datamodule)
     #return results[0]['test_acc']
+
+    # === Compute and print embeddings after training ===
+    try:
+        # Load best encoder weights from pretraining into a fresh encoder copy for clean extraction
+        best_pretrain_ckpt = pretrainer_checkpoint_callback.best_model_path
+        if os.path.exists(best_pretrain_ckpt):
+            lightning_checkpoint = torch.load(best_pretrain_ckpt, map_location="cpu")
+            encoder_module.load_state_dict(lightning_checkpoint["state_dict"])  # refresh in case of later updates
+            extract_encoder = copy.deepcopy(encoder_module.student).eval()
+        else:
+            # fallback: use fine-tuned encoder
+            extract_encoder = copy.deepcopy(enc_classifier.encoder).eval()
+
+        # Dataloaders
+        train_loader = datamodule.train_dataloader()
+        val_loader = datamodule.val_dataloader() if hasattr(datamodule, 'val_dataloader') else datamodule.q_dataloader()
+        test_loader = datamodule.test_dataloader()
+
+        # Compute
+        train_emb, train_lbl = compute_embeddings(extract_encoder, train_loader, device="cpu")
+        val_emb, val_lbl = compute_embeddings(extract_encoder, val_loader, device="cpu")
+        test_emb, test_lbl = compute_embeddings(extract_encoder, test_loader, device="cpu")
+
+        # Print
+        class_names = getattr(datamodule, 'class_names', None)
+        print_embedding_info(train_emb, train_lbl, split_name="train", class_names=class_names)
+        print_embedding_info(val_emb, val_lbl, split_name="val", class_names=class_names)
+        print_embedding_info(test_emb, test_lbl, split_name="test", class_names=class_names)
+
+        # Save under run directory
+        emb_dir = os.path.join(log_dir, 'embeddings', run_name)
+        os.makedirs(emb_dir, exist_ok=True)
+        torch.save({'embeddings': train_emb, 'labels': train_lbl}, os.path.join(emb_dir, 'train.pt'))
+        torch.save({'embeddings': val_emb, 'labels': val_lbl}, os.path.join(emb_dir, 'val.pt'))
+        torch.save({'embeddings': test_emb, 'labels': test_lbl}, os.path.join(emb_dir, 'test.pt'))
+        print(f"Saved embeddings to {emb_dir}")
+    except Exception as e:
+        print(f"Embedding extraction failed: {e}")
 
 if __name__ == "__main__":
     from utils.dotdict import dotdict

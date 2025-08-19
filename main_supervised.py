@@ -20,6 +20,7 @@ from datasets.seedIJCAI_dataset import SEEDIJCAIDataModule
 from datasets.dreamer_dataset import DREAMERDataModule
 from datasets.ucr_dataset import UCRDataModule
 from utils.restricted_float import restricted_float
+from functions.embeddings import compute_embeddings, print_embedding_info
 #from knockknock import email_sender
 #from dotenv import load_dotenv
 
@@ -149,6 +150,31 @@ def main_supervised(args):
     
     with open(os.path.join(supervised_trainer_csv_logger.log_dir,'best_model_path.txt'), 'w') as f:
         f.write(supervised_trainer_checkpoint_callback.best_model_path)
+
+    # === Compute and print embeddings after supervised training ===
+    try:
+        extract_encoder = copy.deepcopy(enc_classifier.encoder).eval()
+        train_loader = datamodule.train_dataloader()
+        val_loader = datamodule.val_dataloader() if hasattr(datamodule, 'val_dataloader') else datamodule.q_dataloader()
+        test_loader = datamodule.test_dataloader()
+
+        train_emb, train_lbl = compute_embeddings(extract_encoder, train_loader, device="cpu")
+        val_emb, val_lbl = compute_embeddings(extract_encoder, val_loader, device="cpu")
+        test_emb, test_lbl = compute_embeddings(extract_encoder, test_loader, device="cpu")
+
+        class_names = getattr(datamodule, 'class_names', None)
+        print_embedding_info(train_emb, train_lbl, split_name="train", class_names=class_names)
+        print_embedding_info(val_emb, val_lbl, split_name="val", class_names=class_names)
+        print_embedding_info(test_emb, test_lbl, split_name="test", class_names=class_names)
+
+        emb_dir = os.path.join(log_dir, 'embeddings', run_name)
+        os.makedirs(emb_dir, exist_ok=True)
+        torch.save({'embeddings': train_emb, 'labels': train_lbl}, os.path.join(emb_dir, 'train.pt'))
+        torch.save({'embeddings': val_emb, 'labels': val_lbl}, os.path.join(emb_dir, 'val.pt'))
+        torch.save({'embeddings': test_emb, 'labels': test_lbl}, os.path.join(emb_dir, 'test.pt'))
+        print(f"Saved embeddings to {emb_dir}")
+    except Exception as e:
+        print(f"Embedding extraction failed (supervised): {e}")
 
 if __name__ == "__main__":
     from utils.dotdict import dotdict

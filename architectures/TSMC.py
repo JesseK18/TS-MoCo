@@ -43,3 +43,19 @@ class TSMC(nn.Module):
         prediction = self.prediction_head(context, K, x[:,:,-K:])
 
         return context, prediction, target
+
+    @torch.no_grad()
+    def encode(self, x: torch.tensor) -> torch.tensor:
+        """
+        Compute a fixed-length representation for each time series in the batch.
+
+        Args:
+            x: Input tensor of shape (batch_size, channels, timesteps)
+
+        Returns:
+            Tensor of shape (batch_size, embedding_dim) containing the CLS-token
+            representations produced by the context encoder.
+        """
+        # Directly use the context encoder over the full input sequence
+        _, context = self.context_encoder(x)
+        return context
