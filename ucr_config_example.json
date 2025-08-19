@@ -1,0 +1,23 @@
+{
+  "log_dir": "/path/to/your/logs",
+  "num_workers": 4,
+  "limit_train_batches": 1.0,
+  "limit_val_batches": 1.0,
+  "limit_test_batches": 1.0,
+  
+  "ss_batch_size": 64,
+  "ss_har_batch_size": 64,
+  "ss_uc_batch_size": 64,
+  "ss_mi_batch_size": 64,
+  "ss_vr_batch_size": 64,
+  "ss_ucr_batch_size": 64,
+  
+  "ss_datapath": "/path/to/SEED/dataset",
+  "ss_emotion_ijcai_datapath": "/path/to/SEEDIJCAI/dataset",
+  "ss_ucihar_datapath": "/path/to/UCIHAR/dataset",
+  "ss_mi_datapath": "/path/to/Cho2017/dataset",
+  "ss_vr_datapath": "/path/to/DREAMER/dataset",
+  "ss_ucr_datapath": "/path/to/UCR/dataset",
+  "ss_ucr_dataset_name": "Coffee",
+  "ss_ucr_batch_size": 64
+}

@@ -3,7 +3,7 @@ __pycache__/
 .vscode
 .DS_STORE
 /.DS_Store
-
+data/
 analysis
 playground
 playground/*

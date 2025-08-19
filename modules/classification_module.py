@@ -27,9 +27,10 @@ class plClassificationModule(pl.LightningModule):
             self.metric_name = "R2"
         else:
             self.criterion = nn.CrossEntropyLoss()
-            self.train_metric = torchmetrics.Accuracy()
-            self.val_metric = torchmetrics.Accuracy()
-            self.test_metric = torchmetrics.Accuracy()
+            num_classes = self.classifier.classifier.out_features
+            self.train_metric = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes)
+            self.val_metric = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes)
+            self.test_metric = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes)
             self.metric_name = "acc"
         self.save_hyperparameters(ignore=['encoder', 'classifier'])
 

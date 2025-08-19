@@ -18,6 +18,7 @@ from modules.classification_module import plClassificationModule
 from datasets.seed_dataset import SEEDDataModule
 from datasets.seedIJCAI_dataset import SEEDIJCAIDataModule
 from datasets.dreamer_dataset import DREAMERDataModule
+from datasets.ucr_dataset import UCRDataModule
 from utils.restricted_float import restricted_float
 #from knockknock import email_sender
 #from dotenv import load_dotenv
@@ -89,8 +90,21 @@ def main_supervised(args):
             device_params['ss_vr_batch_size'],
             num_workers
         )
+    elif args.dataset=="UCR":
+        run_name = "ucr_classification_supervised"
+        datamodule = UCRDataModule(
+            data_dir=device_params["ss_ucr_datapath"],
+            dataset_name=device_params["ss_ucr_dataset_name"],
+            batch_size=device_params['ss_ucr_batch_size'],
+            num_workers=num_workers,
+            q_split=0.15,
+            seed=18,
+            permute_indexes=True
+        )
+        datamodule.prepare_data()
+        datamodule.setup()
     else:
-        raise ValueError(f'parameter dataset has to be one of ["SEED", "SEEDIJCAI", "UCIHAR", "SEEDUC", "Cho2017", "DREAMER"], but got {args.dataset}')
+        raise ValueError(f'parameter dataset has to be one of ["SEED", "SEEDIJCAI", "UCIHAR", "SEEDUC", "Cho2017", "DREAMER", "UCR"], but got {args.dataset}')
     encoder = TSMC(
         pos_embeddings_alpha=args.pos_embeddings_alpha,
         input_features=datamodule.input_features,

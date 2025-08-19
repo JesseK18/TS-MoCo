@@ -31,11 +31,15 @@ class OnetoManyGRU(nn.Module):
         self.teacher_forcing = teacher_forcing
         self.batch_first = batch_first
         self.prediction_head = nn.GRU(embedding_dim, embedding_dim, batch_first=batch_first)
+        # Map from raw output_dim (input features C) to embedding_dim for teacher forcing inputs
         if embedding_dim == output_dim:
-            self.transpose = False
+            self.input_tokenizer = nn.Identity()
+        else:
+            self.input_tokenizer = nn.Linear(output_dim, embedding_dim)
+        # Always provide an untokenizer to map embeddings back to input feature space
+        if embedding_dim == output_dim:
             self.untokenizer = nn.Identity()
         else:
-            self.transpose = True
             self.untokenizer = nn.Linear(embedding_dim, output_dim)
 
     def forward(self, c: torch.Tensor, K: int, x: torch.Tensor = None) -> torch.Tensor:
@@ -53,17 +57,17 @@ class OnetoManyGRU(nn.Module):
             y_k, h_k = self.prediction_head(x_k, h_k)
             y_out.append(y_k)
             if self.teacher_forcing:
-                x_k = x[:,:,-K+k:-K+k+1].transpose(1,2)
+                # Take the next ground-truth target slice (B, C, 1) -> (B, 1, C)
+                x_slice = x[:,:,-K+k:-K+k+1].transpose(1,2)
+                # Project to embedding dimension expected by the GRU
+                x_k = self.input_tokenizer(x_slice)
             else:
                 x_k = y_k
 
+        # y shape: (B, K, embedding_dim)
         y = torch.cat(y_out, dim=1)
-        
-        if self.teacher_forcing:
-          y = y.transpose(1,2)  
-        else:
-            y = self.untokenizer(y)
-        
-        if self.transpose: y = y.transpose(1,2)
-        
+        # Map back to input space (B, K, output_dim)
+        y = self.untokenizer(y)
+        # Return as (B, output_dim, K) to match target x_T from TemporalSplit
+        y = y.transpose(1, 2)
         return y
