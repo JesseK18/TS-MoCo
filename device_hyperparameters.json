@@ -1,11 +1,10 @@
 {
   "log_dir": "logs",
-  "num_workers": 4,
+  "num_workers": 0,
   "limit_train_batches": 1.0,
   "limit_val_batches": 1.0,
   "limit_test_batches": 1.0,
-
-  "ss_ucr_datapath": "./data",
+  "ss_ucr_datapath": "../../data",
   "ss_ucr_dataset_name": "Coffee",
   "ss_ucr_batch_size": 16
 }

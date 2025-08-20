@@ -5,8 +5,10 @@ import numpy as np
 from torch.utils.data import TensorDataset, random_split, DataLoader
 import pytorch_lightning as pl
 
-# Import the user's UCR preprocessing
-from .UCR_preprocess import load_UCR
+# Import the global data loading from parent repo
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
+from data.data_loader import data_loader
+from utils_all.data_utils import loader_to_numpy
 
 class UCRDataModule(pl.LightningDataModule):
     def __init__(
@@ -32,81 +34,93 @@ class UCRDataModule(pl.LightningDataModule):
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor
 
-        # prepare cache path
-        root_dir = os.path.dirname(os.path.dirname(__file__))
-        cache_dir = os.path.join(root_dir, 'data', 'UCR_cache')
-        os.makedirs(cache_dir, exist_ok=True)
-        suffix = '_perm' if permute_indexes else ''
-        self.cache_path = os.path.join(cache_dir, f'{self.dataset_name}{suffix}.pt')
-
     def prepare_data(self):
         pass
 
     def setup(self, stage=None):
-        if os.path.exists(self.cache_path):
-            # load cached tensors
-            data = torch.load(self.cache_path)
-            x_train, y_train = data['x_train'], data['y_train']
-            x_q, y_q = data['x_q'], data['y_q']
-            x_test, y_test = data['x_test'], data['y_test']
-            
-            # wrap into Datasets
-            self.train_dataset = TensorDataset(x_train, y_train)
-            self.q_dataset = TensorDataset(x_q, y_q)
-            self.test_dataset = TensorDataset(x_test, y_test)
+        # Use global data loading from parent repo
+        dm_config = dict(
+            data_dir=self.data_dir,
+            dataset=self.dataset_name,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            q_split=self.q_split,
+            seed=self.seed,
+            permute_indexes=self.permute_indexes,
+            persistent_workers=self.persistent_workers,
+            prefetch_factor=self.prefetch_factor
+        )
         
-        else:
-            # load with ts2vec logic
-            train_np, train_lbl_np, test_np, test_lbl_np = load_UCR(self.dataset_name, base_data_dir=self.data_dir)
-            # ts2vec returns (N, T, 1); convert to (N, 1, T)
-            x_train = torch.from_numpy(train_np).float()
-            x_test = torch.from_numpy(test_np).float()
-            y_train = torch.from_numpy(train_lbl_np).long()
-            y_test = torch.from_numpy(test_lbl_np).long()
+        # Load data using global data loader
+        dm = data_loader(dm_config)
+        dm.prepare_data()
+        dm.setup()
+        
+        # Extract numpy arrays from loaders
+        train_loader = dm.train_dataloader()
+        q_loader = dm.q_dataloader()
+        test_loader = dm.test_dataloader()
+        
+        train_np, train_lbl_np = loader_to_numpy(train_loader)
+        q_np, q_lbl_np = loader_to_numpy(q_loader)
+        test_np, test_lbl_np = loader_to_numpy(test_loader)
+        
+        print(f"Data shapes after loading:")
+        print(f"  Train: {train_np.shape}, labels: {train_lbl_np.shape}")
+        print(f"  Q: {q_np.shape}, labels: {q_lbl_np.shape}")
+        print(f"  Test: {test_np.shape}, labels: {test_lbl_np.shape}")
+        
+        # Convert to tensors
+        x_train = torch.from_numpy(train_np).float()
+        x_q = torch.from_numpy(q_np).float()
+        x_test = torch.from_numpy(test_np).float()
+        y_train = torch.from_numpy(train_lbl_np).long()
+        y_q = torch.from_numpy(q_lbl_np).long()
+        y_test = torch.from_numpy(test_lbl_np).long()
 
-            # Permute if needed
-            if self.permute_indexes:
-                # Permute from (N, T, 1) to (N, 1, T)
-                x_train = x_train.permute(0, 2, 1)
+        # Handle shape conversion for TS-MoCo
+        # Global loader returns (N, T, C) format, but our debug shows it's actually (N, C, T)
+        # TS-MoCo expects (N, C, T) format
+        print(f"Original data shapes:")
+        print(f"  Train: {x_train.shape}")
+        print(f"  Q: {x_q.shape}")
+        print(f"  Test: {x_test.shape}")
+        
+        # Check if we need to permute based on actual shape
+        if len(x_train.shape) == 3:
+            # If shape is (N, T, C), convert to (N, C, T)
+            if x_train.shape[1] > x_train.shape[2]:  # T > C, so it's (N, T, C)
+                print("Converting from (N, T, C) to (N, C, T)")
+                x_train = x_train.permute(0, 2, 1)  # -> (N, C, T)
+                x_q = x_q.permute(0, 2, 1)
                 x_test = x_test.permute(0, 2, 1)
-            
-            # train/val split
-            full = TensorDataset(x_train, y_train)
-            n_q = int(len(full) * self.q_split)
-            n_tr = len(full) - n_q
-            self.train_dataset, self.q_dataset = random_split(
-                full,
-                [n_tr, n_q],
-                generator=torch.Generator().manual_seed(self.seed)
-            )
-            # test
-            self.test_dataset = TensorDataset(x_test, y_test)
-            
-            # --- now cache exactly those six splits ---
-            train_idx = self.train_dataset.indices
-            q_idx = self.q_dataset.indices
-
-            x_train_cache = x_train[train_idx]
-            y_train_cache = y_train[train_idx]
-            x_q_cache = x_train[q_idx]
-            y_q_cache = y_train[q_idx]
-            
-            # x_test / y_test are already full test set
-
-            torch.save({
-                'x_train': x_train_cache,
-                'y_train': y_train_cache,
-                'x_q': x_q_cache,
-                'y_q': y_q_cache,
-                'x_test': x_test,
-                'y_test': y_test
-            }, self.cache_path)
+            else:  # Already in (N, C, T) format
+                print("Data already in (N, C, T) format, no permutation needed")
+        elif len(x_train.shape) == 2:  # (N, T) - univariate
+            print("Converting from (N, T) to (N, 1, T)")
+            x_train = x_train.unsqueeze(1)  # -> (N, 1, T)
+            x_q = x_q.unsqueeze(1)
+            x_test = x_test.unsqueeze(1)
+        
+        print(f"Data shapes after permutation:")
+        print(f"  Train: {x_train.shape}")
+        print(f"  Q: {x_q.shape}")
+        print(f"  Test: {x_test.shape}")
+        
+        # Create datasets
+        self.train_dataset = TensorDataset(x_train, y_train)
+        self.q_dataset = TensorDataset(x_q, y_q)
+        self.test_dataset = TensorDataset(x_test, y_test)
 
         # Set input features and number of classes for TS-MoCo compatibility
         # Get sample from train dataset to determine input features
         sample_x, _ = self.train_dataset[0]
-        if len(sample_x.shape) == 3:  # (1, T) format
-            self.input_features = sample_x.shape[0]  # Number of features
+        print(f"Sample shape: {sample_x.shape}")
+        
+        if len(sample_x.shape) == 2:  # (C, T) format
+            self.input_features = sample_x.shape[0]  # Number of features/channels
+        elif len(sample_x.shape) == 1:  # (T,) format - univariate
+            self.input_features = 1
         else:  # (T,) format
             self.input_features = 1
         
@@ -117,6 +131,13 @@ class UCRDataModule(pl.LightningDataModule):
             all_labels.append(label.item())
         self.n_classes = len(set(all_labels))
         self.class_names = [f"Class_{i}" for i in range(self.n_classes)]
+        
+        print(f"TS-MoCo config:")
+        print(f"  Input features: {self.input_features}")
+        print(f"  Number of classes: {self.n_classes}")
+        print(f"  Train samples: {len(self.train_dataset)}")
+        print(f"  Val samples: {len(self.q_dataset)}")
+        print(f"  Test samples: {len(self.test_dataset)}")
 
     def train_dataloader(self):
         # prefetch_factor only valid when num_workers>0
@@ -128,7 +149,8 @@ class UCRDataModule(pl.LightningDataModule):
                 num_workers=self.num_workers,
                 pin_memory=True,
                 persistent_workers=self.persistent_workers,
-                prefetch_factor=self.prefetch_factor
+                prefetch_factor=self.prefetch_factor,
+                drop_last=False  # Don't drop incomplete batches
             )
         else:
             return DataLoader(
@@ -136,7 +158,8 @@ class UCRDataModule(pl.LightningDataModule):
                 batch_size=self.batch_size,
                 shuffle=True,
                 num_workers=0,
-                pin_memory=True
+                pin_memory=True,
+                drop_last=False  # Don't drop incomplete batches
             )
 
     def val_dataloader(self):
@@ -149,7 +172,8 @@ class UCRDataModule(pl.LightningDataModule):
                 num_workers=self.num_workers,
                 pin_memory=True,
                 persistent_workers=self.persistent_workers,
-                prefetch_factor=self.prefetch_factor
+                prefetch_factor=self.prefetch_factor,
+                drop_last=False  # Don't drop incomplete batches
             )
         else:
             return DataLoader(
@@ -157,7 +181,8 @@ class UCRDataModule(pl.LightningDataModule):
                 batch_size=self.batch_size,
                 shuffle=False,
                 num_workers=0,
-                pin_memory=True
+                pin_memory=True,
+                drop_last=False  # Don't drop incomplete batches
             )
 
     def test_dataloader(self):
@@ -169,7 +194,8 @@ class UCRDataModule(pl.LightningDataModule):
                 num_workers=self.num_workers,
                 pin_memory=True,
                 persistent_workers=self.persistent_workers,
-                prefetch_factor=self.prefetch_factor
+                prefetch_factor=self.prefetch_factor,
+                drop_last=False  # Don't drop incomplete batches
             )
         else:
             return DataLoader(
@@ -177,7 +203,8 @@ class UCRDataModule(pl.LightningDataModule):
                 batch_size=self.batch_size,
                 shuffle=False,
                 num_workers=0,
-                pin_memory=True
+                pin_memory=True,
+                drop_last=False  # Don't drop incomplete batches
             )
 
     # Keep the original q_dataloader for backward compatibility

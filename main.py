@@ -21,6 +21,7 @@ from datasets.cho2017_dataset import Cho2017DataModule
 from datasets.ucr_dataset import UCRDataModule
 from utils.restricted_float import restricted_float
 from functions.embeddings import compute_embeddings, print_embedding_info
+from classification.classification import eval_classification_emb   
 #from knockknock import email_sender
 #from dotenv import load_dotenv
 
@@ -134,7 +135,7 @@ def main(args):
         args.lr,
         num_workers
     )
-    pretrainer_checkpoint_callback = ModelCheckpoint(monitor="val_loss", dirpath=f"{log_dir}/checkpoints/{run_name}", save_last=True)
+    pretrainer_checkpoint_callback = ModelCheckpoint(monitor="train_loss", dirpath=f"{log_dir}/checkpoints/{run_name}", save_last=True, mode="min")
     pretrainer_csv_logger = CSVLogger(save_dir=f"{log_dir}/csv/", name=run_name)
     pretrainer = pl.Trainer(
         accelerator = "auto",
@@ -152,7 +153,7 @@ def main(args):
         limit_val_batches=limit_val_batches,
     )
 
-    supervised_trainer_checkpoint_callback = ModelCheckpoint(monitor="val_loss",dirpath=f"{log_dir}/checkpoints/{run_name}_classification", save_last=True)
+    supervised_trainer_checkpoint_callback = ModelCheckpoint(monitor="train_loss",dirpath=f"{log_dir}/checkpoints/{run_name}_classification", save_last=True, mode="min")
     supervised_trainer_csv_logger = CSVLogger(save_dir=f"{log_dir}/csv/", name=f"{run_name}_classification")
     supervised_trainer = pl.Trainer(
         accelerator = "auto",
@@ -160,7 +161,7 @@ def main(args):
         max_epochs=args.finetune_epochs,
         log_every_n_steps=1,
         callbacks=[
-            EarlyStopping(monitor="val_loss", mode="min", patience=args.es_after_epochs),
+            EarlyStopping(monitor="train_loss", mode="min", patience=args.es_after_epochs),
             supervised_trainer_checkpoint_callback
         ],
         logger=[
@@ -180,29 +181,27 @@ def main(args):
         f.write(pretrainer_checkpoint_callback.best_model_path)
     lightning_checkpoint = torch.load(pretrainer_checkpoint_callback.best_model_path)
     encoder_module.load_state_dict(lightning_checkpoint["state_dict"])
-    enc_classifier.encoder.load_state_dict(encoder_module.student.state_dict())
-
-    supervised_trainer_csv_logger.log_dir
-    #### START OF FINE-TUNING ####
-    supervised_trainer.fit(enc_classifier, datamodule)
     
-    with open(os.path.join(supervised_trainer_csv_logger.log_dir,'best_model_path.txt'), 'w') as f:
-        f.write(supervised_trainer_checkpoint_callback.best_model_path)
+    # Only do supervised fine-tuning if finetune_epochs > 0
+    if args.finetune_epochs > 0:
+        enc_classifier.encoder.load_state_dict(encoder_module.student.state_dict())
+
+        supervised_trainer_csv_logger.log_dir
+        #### START OF FINE-TUNING ####
+        supervised_trainer.fit(enc_classifier, datamodule)
+        
+        with open(os.path.join(supervised_trainer_csv_logger.log_dir,'best_model_path.txt'), 'w') as f:
+            f.write(supervised_trainer_checkpoint_callback.best_model_path)
+    else:
+        print("Skipping supervised fine-tuning (finetune_epochs=0)")
 
     #results = supervised_trainer.test(enc_classifier, datamodule)
     #return results[0]['test_acc']
 
     # === Compute and print embeddings after training ===
     try:
-        # Load best encoder weights from pretraining into a fresh encoder copy for clean extraction
-        best_pretrain_ckpt = pretrainer_checkpoint_callback.best_model_path
-        if os.path.exists(best_pretrain_ckpt):
-            lightning_checkpoint = torch.load(best_pretrain_ckpt, map_location="cpu")
-            encoder_module.load_state_dict(lightning_checkpoint["state_dict"])  # refresh in case of later updates
-            extract_encoder = copy.deepcopy(encoder_module.student).eval()
-        else:
-            # fallback: use fine-tuned encoder
-            extract_encoder = copy.deepcopy(enc_classifier.encoder).eval()
+        # Use the pretrained encoder for embedding extraction
+        extract_encoder = copy.deepcopy(encoder_module.student).eval()
 
         # Dataloaders
         train_loader = datamodule.train_dataloader()
@@ -213,13 +212,23 @@ def main(args):
         train_emb, train_lbl = compute_embeddings(extract_encoder, train_loader, device="cpu")
         val_emb, val_lbl = compute_embeddings(extract_encoder, val_loader, device="cpu")
         test_emb, test_lbl = compute_embeddings(extract_encoder, test_loader, device="cpu")
-
+        
+        
+        
+        
         # Print
         class_names = getattr(datamodule, 'class_names', None)
         print_embedding_info(train_emb, train_lbl, split_name="train", class_names=class_names)
         print_embedding_info(val_emb, val_lbl, split_name="val", class_names=class_names)
         print_embedding_info(test_emb, test_lbl, split_name="test", class_names=class_names)
 
+        
+        _ , acc= eval_classification_emb(train_emb, train_lbl, test_emb, test_lbl, eval_protocol='linear')
+        
+        
+        print("=============")
+        print(f"Accuracy: {acc['acc']:.4f}")
+        print("=============")
         # Save under run directory
         emb_dir = os.path.join(log_dir, 'embeddings', run_name)
         os.makedirs(emb_dir, exist_ok=True)

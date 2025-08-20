@@ -126,7 +126,7 @@ def main_supervised(args):
         freeze_encoder=False
     )
 
-    supervised_trainer_checkpoint_callback = ModelCheckpoint(monitor="val_loss",dirpath=f"{log_dir}/checkpoints/{run_name}_classification", save_last=True)
+    supervised_trainer_checkpoint_callback = ModelCheckpoint(monitor="train_loss",dirpath=f"{log_dir}/checkpoints/{run_name}_classification", save_last=True, mode="min")
     supervised_trainer_csv_logger = CSVLogger(save_dir=f"{log_dir}/csv/", name=f"{run_name}_classification")
     supervised_trainer = pl.Trainer(
         accelerator = "auto",
@@ -134,7 +134,7 @@ def main_supervised(args):
         max_epochs=args.finetune_epochs,
         log_every_n_steps=1,
         callbacks=[
-            EarlyStopping(monitor="val_loss", mode="min", patience=args.es_after_epochs),
+            EarlyStopping(monitor="train_loss", mode="min", patience=args.es_after_epochs),
             supervised_trainer_checkpoint_callback
         ],
         logger=[
